@@ -8,14 +8,24 @@ import Corners from "./corners";
 import HomeButton from "./homeButton";
 import Sidebar from "./sidebar";
 import Container from "./container";
-import VideoAndSidebar from "./videoAndSidebar";
 import StudyButton from "./studyButton";
 import FenButton from "./fenButton";
 import DeviceButton from "./deviceButton";
 import Toast from "./toast";
 
 export {
-  SidebarButton, CornersButton, PgnButton, Icon, Corners,
-  HomeButton, Sidebar, Container, VideoAndSidebar, RecordButton, StopButton, StudyButton,
-  FenButton, DeviceButton, Toast,
+  SidebarButton,
+  CornersButton,
+  PgnButton,
+  Icon,
+  Corners,
+  HomeButton,
+  Sidebar,
+  Container,
+  RecordButton,
+  StopButton,
+  StudyButton,
+  FenButton,
+  DeviceButton,
+  Toast,
 };

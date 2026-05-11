@@ -1,7 +1,7 @@
 import { renderState } from "./render/renderState";
 import * as tf from "@tensorflow/tfjs-core";
 import { getInvTransform, transformBoundary, transformCenters } from "./warp";
-import { gameUpdate, makeUpdatePayload } from "../slices/gameSlice";
+import { makeUpdatePayload } from "../slices/gameSlice";
 import { getBoxesAndScores, getInput, getXY, invalidVideo } from "./detect";
 import { Mode, MovesData, MovesPair } from "../types";
 import { zeros } from "./math";
@@ -9,22 +9,49 @@ import { CORNER_KEYS } from "./constants";
 import { parseSan } from "chessops/san";
 import { makeUci } from "chessops/util";
 
-const calculateScore = (state: any, move: MovesData, from_thr = 0.6, to_thr = 0.6) => {
+export const processBoardUpdate = (
+  payload: any,
+  onUpdate: (data: any) => void,
+) => {
+  onUpdate({
+    fen: payload.fen,
+    lastMove: payload.lastMove,
+    isCheck: payload.isCheck ?? false,
+    moves: payload.moves,
+    greedy: payload.greedy,
+    fromOpponent: payload.fromOpponent,
+    error: payload.error ?? null,
+  });
+};
+
+const calculateScore = (
+  state: any,
+  move: MovesData,
+  from_thr = 0.6,
+  to_thr = 0.6,
+) => {
   let score = 0;
   move.from.forEach(square => {
     score += 1 - Math.max(...state[square]) - from_thr;
-  })
+  });
 
   for (let i = 0; i < move.to.length; i++) {
     score += state[move.to[i]][move.targets[i]] - to_thr;
   }
 
-  return score
-}
+  return score;
+};
 
-const processState = (state: any, movesPairs: MovesPair[], possibleMoves: Set<string>): {
-  bestScore1: number, bestScore2: number, bestJointScore: number,
-  bestMove: MovesData | null, bestMoves: MovesData | null
+const processState = (
+  state: any,
+  movesPairs: MovesPair[],
+  possibleMoves: Set<string>,
+): {
+  bestScore1: number;
+  bestScore2: number;
+  bestJointScore: number;
+  bestMove: MovesData | null;
+  bestMoves: MovesData | null;
 } => {
   let bestScore1 = Number.NEGATIVE_INFINITY;
   let bestScore2 = Number.NEGATIVE_INFINITY;
@@ -46,7 +73,11 @@ const processState = (state: any, movesPairs: MovesPair[], possibleMoves: Set<st
       }
     }
 
-    if ((movePair.move2 === null) || (movePair.moves === null) || !(possibleMoves.has(movePair.move1.sans[0]))) {
+    if (
+      movePair.move2 === null ||
+      movePair.moves === null ||
+      !possibleMoves.has(movePair.move1.sans[0])
+    ) {
       return;
     }
 
@@ -62,10 +93,10 @@ const processState = (state: any, movesPairs: MovesPair[], possibleMoves: Set<st
       bestJointScore = jointScore;
       bestMoves = movePair.moves;
     }
-  })
+  });
 
   return { bestScore1, bestScore2, bestJointScore, bestMove, bestMoves };
-}
+};
 
 const getBoxCenters = (boxes: tf.Tensor2D) => {
   const boxCenters: tf.Tensor2D = tf.tidy(() => {
@@ -76,52 +107,74 @@ const getBoxCenters = (boxes: tf.Tensor2D) => {
     const cy: tf.Tensor2D = tf.sub(b, tf.div(tf.sub(r, l), 3));
     const boxCenters: tf.Tensor2D = tf.concat([cx, cy], 1);
     return boxCenters;
-  })
+  });
   return boxCenters;
-}
+};
 
-export const getSquares = (boxes: tf.Tensor2D, centers3D: tf.Tensor3D, boundary3D: tf.Tensor3D): number[] => {
+export const getSquares = (
+  boxes: tf.Tensor2D,
+  centers3D: tf.Tensor3D,
+  boundary3D: tf.Tensor3D,
+): number[] => {
   const squares: number[] = tf.tidy(() => {
     const boxCenters3D: tf.Tensor3D = tf.expandDims(getBoxCenters(boxes), 1);
-    const dist: tf.Tensor2D = tf.sum(tf.square(tf.sub(boxCenters3D, centers3D)), 2);
+    const dist: tf.Tensor2D = tf.sum(
+      tf.square(tf.sub(boxCenters3D, centers3D)),
+      2,
+    );
     const squares: any = tf.argMin(dist, 1);
 
-    const shiftedBoundary3D: tf.Tensor3D = tf.concat([
-      tf.slice(boundary3D, [0, 1, 0], [1, 3, 2]),
-      tf.slice(boundary3D, [0, 0, 0], [1, 1, 2]),
-    ], 1);
+    const shiftedBoundary3D: tf.Tensor3D = tf.concat(
+      [
+        tf.slice(boundary3D, [0, 1, 0], [1, 3, 2]),
+        tf.slice(boundary3D, [0, 0, 0], [1, 1, 2]),
+      ],
+      1,
+    );
 
     const nBoxes: number = boxCenters3D.shape[0];
 
-    const a: tf.Tensor2D = tf.squeeze(tf.sub(
-      tf.slice(boundary3D, [0, 0, 0], [1, 4, 1]),
-      tf.slice(shiftedBoundary3D, [0, 0, 0], [1, 4, 1])
-    ), [2]);
-    const b: tf.Tensor2D = tf.squeeze(tf.sub(
-      tf.slice(boundary3D, [0, 0, 1], [1, 4, 1]),
-      tf.slice(shiftedBoundary3D, [0, 0, 1], [1, 4, 1])
-    ), [2]);
-    const c: tf.Tensor2D = tf.squeeze(tf.sub(
-      tf.slice(boxCenters3D, [0, 0, 0], [nBoxes, 1, 1]),
-      tf.slice(shiftedBoundary3D, [0, 0, 0], [1, 4, 1])
-    ), [2]);
-    const d: tf.Tensor2D = tf.squeeze(tf.sub(
-      tf.slice(boxCenters3D, [0, 0, 1], [nBoxes, 1, 1]),
-      tf.slice(shiftedBoundary3D, [0, 0, 1], [1, 4, 1])
-    ), [2]);
+    const a: tf.Tensor2D = tf.squeeze(
+      tf.sub(
+        tf.slice(boundary3D, [0, 0, 0], [1, 4, 1]),
+        tf.slice(shiftedBoundary3D, [0, 0, 0], [1, 4, 1]),
+      ),
+      [2],
+    );
+    const b: tf.Tensor2D = tf.squeeze(
+      tf.sub(
+        tf.slice(boundary3D, [0, 0, 1], [1, 4, 1]),
+        tf.slice(shiftedBoundary3D, [0, 0, 1], [1, 4, 1]),
+      ),
+      [2],
+    );
+    const c: tf.Tensor2D = tf.squeeze(
+      tf.sub(
+        tf.slice(boxCenters3D, [0, 0, 0], [nBoxes, 1, 1]),
+        tf.slice(shiftedBoundary3D, [0, 0, 0], [1, 4, 1]),
+      ),
+      [2],
+    );
+    const d: tf.Tensor2D = tf.squeeze(
+      tf.sub(
+        tf.slice(boxCenters3D, [0, 0, 1], [nBoxes, 1, 1]),
+        tf.slice(shiftedBoundary3D, [0, 0, 1], [1, 4, 1]),
+      ),
+      [2],
+    );
 
     const det: tf.Tensor2D = tf.sub(tf.mul(a, d), tf.mul(b, c));
     const newSquares: tf.Tensor1D = tf.where(
       tf.any(tf.less(det, 0), 1),
       tf.scalar(-1),
-      squares
+      squares,
     );
 
     return newSquares.arraySync();
   });
 
   return squares;
-}
+};
 
 export const getUpdate = (scoresTensor: tf.Tensor2D, squares: number[]) => {
   const update: number[][] = zeros(64, 12);
@@ -129,54 +182,92 @@ export const getUpdate = (scoresTensor: tf.Tensor2D, squares: number[]) => {
 
   for (let i = 0; i < squares.length; i++) {
     const square = squares[i];
-    if (typeof square !== 'number' || !Number.isInteger(square) || square < 0 || square >= 64) {
+    if (
+      typeof square !== "number" ||
+      !Number.isInteger(square) ||
+      square < 0 ||
+      square >= 64
+    ) {
       continue;
     }
     for (let j = 0; j < 12; j++) {
-      update[square][j] = Math.max(update[square][j], scores[i][j])
+      update[square][j] = Math.max(update[square][j], scores[i][j]);
     }
   }
   return update;
-}
+};
 
-const updateState = (state: number[][], update: number[][], decay: number = 0.5) => {
+const updateState = (
+  state: number[][],
+  update: number[][],
+  decay: number = 0.5,
+) => {
   for (let i = 0; i < 64; i++) {
     for (let j = 0; j < 12; j++) {
-      state[i][j] = decay * state[i][j] + (1 - decay) * update[i][j]
+      state[i][j] = decay * state[i][j] + (1 - decay) * update[i][j];
     }
   }
-  return state
-}
+  return state;
+};
 
 const sanToLan = (board: any, san: string): string => {
   const move = parseSan(board, san);
   if (!move) return "";
   return makeUci(move);
-}
+};
 
-export const detect = async (modelRef: any, videoRef: any, keypoints: number[][]):
-  Promise<{ boxes: tf.Tensor2D, scores: tf.Tensor2D }> => {
-  const { image4D, width, height, padding, roi } = getInput(videoRef, keypoints);
+export const detect = async (
+  modelRef: any,
+  videoRef: any,
+  keypoints: number[][],
+): Promise<{ boxes: tf.Tensor2D; scores: tf.Tensor2D }> => {
+  const { image4D, width, height, padding, roi } = getInput(
+    videoRef,
+    keypoints,
+  );
   const videoWidth: number = videoRef.current.videoWidth;
   const videoHeight: number = videoRef.current.videoHeight;
   const preds: tf.Tensor3D = modelRef.current.predict(image4D);
-  const { boxes, scores } = getBoxesAndScores(preds, width, height, videoWidth, videoHeight, padding, roi);
+  const { boxes, scores } = getBoxesAndScores(
+    preds,
+    width,
+    height,
+    videoWidth,
+    videoHeight,
+    padding,
+    roi,
+  );
 
   tf.dispose([image4D, preds]);
 
-  return { boxes, scores }
-}
+  return { boxes, scores };
+};
 
 export const getKeypoints = (cornersRef: any, canvasRef: any): number[][] => {
   const keypoints = CORNER_KEYS.map(x =>
-    getXY(cornersRef.current[x], canvasRef.current.height, canvasRef.current.width)
+    getXY(
+      cornersRef.current[x],
+      canvasRef.current.height,
+      canvasRef.current.width,
+    ),
   );
-  return keypoints
-}
+  return keypoints;
+};
 
-export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
-  playingRef: any, setText: any, dispatch: any, cornersRef: any, boardRef: any,
-  movesPairsRef: any, lastMoveRef: any, moveTextRef: any, mode: Mode) => {
+export const findPieces = (
+  modelRef: any,
+  videoRef: any,
+  canvasRef: any,
+  playingRef: any,
+  setText: any,
+  cornersRef: any,
+  boardRef: any,
+  movesPairsRef: any,
+  lastMoveRef: any,
+  moveTextRef: any,
+  mode: Mode,
+  onUpdate?: (data: any) => void,
+) => {
   let centers: number[][] | null = null;
   let boundary: number[][];
   let centers3D: tf.Tensor3D;
@@ -189,7 +280,7 @@ export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
 
   const loop = async () => {
     if (playingRef.current === false || invalidVideo(videoRef)) {
-      centers = null
+      centers = null;
     } else {
       if (centers === null) {
         keypoints = getKeypoints(cornersRef, canvasRef);
@@ -197,7 +288,7 @@ export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
         [centers, centers3D] = transformCenters(invTransform);
         [boundary, boundary3D] = transformBoundary(invTransform);
         state = zeros(64, 12);
-        possibleMoves = new Set<string>;
+        possibleMoves = new Set<string>();
         greedyMoveToTime = {};
       }
       const startTime: number = performance.now();
@@ -207,15 +298,17 @@ export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
       const squares: number[] = getSquares(boxes, centers3D, boundary3D);
       const update: number[][] = getUpdate(scores, squares);
       state = updateState(state, update);
-      const { bestScore1, bestScore2, bestJointScore, bestMove, bestMoves } = processState(state, movesPairsRef.current, possibleMoves);
+      const { bestScore1, bestScore2, bestJointScore, bestMove, bestMoves } =
+        processState(state, movesPairsRef.current, possibleMoves);
 
       const endTime: number = performance.now();
       const fps: string = (1000 / (endTime - startTime)).toFixed(1);
 
       let hasMove: boolean = false;
-      if ((bestMoves !== null) && (mode !== "play")) {
+      if (bestMoves !== null && mode !== "play") {
         const move: string = bestMoves.sans[0];
-        hasMove = (bestScore2 > 0) && (bestJointScore > 0) && (possibleMoves.has(move));
+        hasMove =
+          bestScore2 > 0 && bestJointScore > 0 && possibleMoves.has(move);
         if (hasMove) {
           boardRef.current.playSan(move);
           possibleMoves.clear();
@@ -224,14 +317,15 @@ export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
       }
 
       let hasGreedyMove: boolean = false;
-      if (bestMove !== null && !(hasMove) && (bestScore1 > 0)) {
+      if (bestMove !== null && !hasMove && bestScore1 > 0) {
         const move: string = bestMove.sans[0];
         if (!(move in greedyMoveToTime)) {
           greedyMoveToTime[move] = endTime;
         }
 
-        const secondElapsed = (endTime - greedyMoveToTime[move]) > 1000;
-        const newMove = sanToLan(boardRef.current, move) !== lastMoveRef.current;
+        const secondElapsed = endTime - greedyMoveToTime[move] > 1000;
+        const newMove =
+          sanToLan(boardRef.current, move) !== lastMoveRef.current;
         hasGreedyMove = secondElapsed && newMove;
         if (hasGreedyMove) {
           boardRef.current.playSan(move);
@@ -241,10 +335,20 @@ export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
 
       if (hasMove || hasGreedyMove) {
         // No takebacks in "play" mode
-        const greedy = (mode === "play") ? false : hasGreedyMove;
+        const greedy = mode === "play" ? false : hasGreedyMove;
         const payload = makeUpdatePayload(boardRef.current, greedy);
         console.log("payload", payload);
-        dispatch(gameUpdate(payload));
+        if (onUpdate) {
+          onUpdate({
+            fen: payload.fen,
+            lastMove: payload.lastMove,
+            isCheck: false,
+            moves: payload.moves,
+            greedy: payload.greedy,
+            fromOpponent: payload.fromOpponent,
+            error: payload.error ?? null,
+          });
+        }
       }
       setText([`FPS: ${fps}`, moveTextRef.current]);
 
@@ -254,11 +358,11 @@ export const findPieces = (modelRef: any, videoRef: any, canvasRef: any,
 
       const endTensors: number = tf.memory().numTensors;
       if (startTensors < endTensors) {
-        console.error(`Memory Leak! (${endTensors} > ${startTensors})`)
+        console.error(`Memory Leak! (${endTensors} > ${startTensors})`);
       }
     }
     requestId = requestAnimationFrame(loop);
-  }
+  };
   requestId = requestAnimationFrame(loop);
 
   return () => {
