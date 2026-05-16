@@ -1,5 +1,10 @@
 import { vi } from "vitest";
 
+export const VIDEO_FIXTURE_URL = new URL(
+  "../../../video/0509.mp4",
+  import.meta.url,
+).href;
+
 // Mock Camera API to use pre-recorded video instead
 Object.defineProperty(global.navigator, "mediaDevices", {
   value: {
@@ -26,7 +31,7 @@ Object.defineProperty(HTMLVideoElement.prototype, "addEventListener", {
     if (type === "loadedmetadata" && typeof listener === "function") {
       // Set src to pre-recorded video before triggering loadedmetadata
       if (this.tagName === "VIDEO" && !this.src) {
-        this.src = "../../../video/0509.mp4";
+        this.src = VIDEO_FIXTURE_URL;
       }
       queueMicrotask(() => listener(new Event("loadedmetadata")));
     }
@@ -37,9 +42,9 @@ Object.defineProperty(HTMLVideoElement.prototype, "addEventListener", {
 
 // Mock srcObject to set src instead for video files
 Object.defineProperty(HTMLVideoElement.prototype, "srcObject", {
-  set: function (value) {
+  set: function () {
     // Instead of setting srcObject, set src to the pre-recorded video
-    this.src = "../../../video/0509.mp4";
+    this.src = VIDEO_FIXTURE_URL;
   },
   configurable: true,
 });
@@ -56,7 +61,10 @@ Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", {
 
 vi.mock("../utils/loadModels", () => ({
   __esModule: true,
-  default: vi.fn(),
+  default: vi.fn(async (piecesModelRef: any, xcornersModelRef: any) => {
+    piecesModelRef.current = { name: "pieces-model" };
+    xcornersModelRef.current = { name: "xcorners-model" };
+  }),
 }));
 
 vi.mock("../utils/findCorners", () => ({

@@ -8,17 +8,13 @@ export const invalidVideo = (videoRef: any) => {
 
   if (videoRef.current.autoplay) {
     // Record check
-    if (videoRef.current?.srcObject === null) {
+    if (videoRef.current?.srcObject === null && !videoRef.current?.src) {
       return true;
     }
   } else {
     // Upload check
     const src = videoRef.current?.src;
-    if (src === null) {
-      return true;
-    }
-
-    if (!(src.startsWith("blob"))) {
+    if (!src) {
       return true;
     }
   }

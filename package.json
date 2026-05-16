@@ -7,6 +7,7 @@
     "start": "vite",
     "build": "tsc && eslint src --report-unused-disable-directives --max-warnings 0 && vite build",
     "test": "vitest run",
+    "test:fullgame": "node scripts/run-fullgame.mjs",
     "lint": "eslint src --report-unused-disable-directives --max-warnings 0",
     "tsc": "tsc",
     "preview": "vite preview",

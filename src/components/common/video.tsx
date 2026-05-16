@@ -11,10 +11,16 @@ const Video = ({
   piecesModelRef,
   xcornersModelRef,
   onMoveDetected,
+  sourceUrl,
+  playbackRate = 1,
+  onVideoEnded,
 }: {
   piecesModelRef: any;
   xcornersModelRef: any;
   onMoveDetected?: (data: any) => void;
+  sourceUrl?: string;
+  playbackRate?: number;
+  onVideoEnded?: () => void;
 }) => {
   const videoRef = useRef<any>(null);
   const canvasRef = useRef<any>(null);
@@ -42,13 +48,19 @@ const Video = ({
 
   useEffect(() => {
     const initialize = async () => {
-      LoadModels(piecesModelRef, xcornersModelRef);
-
       try {
-        const stream =
-          await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS);
+        await LoadModels(piecesModelRef, xcornersModelRef);
+
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+          if (sourceUrl) {
+            videoRef.current.src = sourceUrl;
+            videoRef.current.autoplay = false;
+          } else {
+            const stream =
+              await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS);
+            videoRef.current.srcObject = stream;
+          }
+          videoRef.current.playbackRate = playbackRate;
         }
 
         await new Promise<void>(resolve => {
@@ -92,8 +104,15 @@ const Video = ({
           onMoveDetected,
         );
 
+        const handleEnded = () => {
+          playingRef.current = false;
+          onVideoEnded?.();
+        };
+        videoRef.current?.addEventListener("ended", handleEnded);
+
         return () => {
           cleanupFindPieces?.();
+          videoRef.current?.removeEventListener("ended", handleEnded);
           if (videoRef.current?.srcObject) {
             const tracks = (
               videoRef.current.srcObject as MediaStream
@@ -113,7 +132,14 @@ const Video = ({
         .then((cleanup: any) => cleanup && cleanup())
         .catch(() => undefined);
     };
-  }, [piecesModelRef, xcornersModelRef, onMoveDetected]);
+  }, [
+    piecesModelRef,
+    xcornersModelRef,
+    onMoveDetected,
+    sourceUrl,
+    playbackRate,
+    onVideoEnded,
+  ]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
