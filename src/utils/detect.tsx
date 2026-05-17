@@ -6,17 +6,17 @@ export const invalidVideo = (videoRef: any) => {
     return true;
   }
 
-  if (videoRef.current.autoplay) {
-    // Record check
-    if (videoRef.current?.srcObject === null && !videoRef.current?.src) {
-      return true;
-    }
-  } else {
-    // Upload check
-    const src = videoRef.current?.src;
-    if (!src) {
-      return true;
-    }
+  const video = videoRef.current;
+  const hasStream = !!video.srcObject;
+  const hasSrc = !!video.src;
+
+  if (!hasStream && !hasSrc) {
+    return true;
+  }
+
+  if (video.readyState < 1) {
+    // We need at least metadata to get videoWidth/videoHeight
+    return true;
   }
 
   return false;

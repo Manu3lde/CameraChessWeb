@@ -1,6 +1,6 @@
 import "bootstrap/dist/css/bootstrap.min.css";
 import { createRoot } from "react-dom/client";
-import { useRef, useState } from "react";
+import { useRef, useState, useCallback } from "react";
 import "./style/index.css";
 import Video from "./components/common/video";
 import { START_FEN } from "./utils/constants";
@@ -39,6 +39,26 @@ const FullGameRunner = () => {
     new URLSearchParams(window.location.search).get("rate") ?? "2",
   );
 
+  const onMoveDetected = useCallback((payload: any) => {
+    latestRef.current = payload;
+    setLatest(payload);
+    console.log("FULLGAME_UPDATE", payload);
+  }, []);
+
+  const onVideoEnded = useCallback(() => {
+    setDone(true);
+    const game = makeGameFromPayload(latestRef.current);
+    const result = {
+      status: "done",
+      fen: game.fen,
+      pgn: makePgn(game),
+      moves: game.moves,
+      lastMove: game.lastMove,
+      error: game.error,
+    };
+    console.log("FULLGAME_RESULT", JSON.stringify(result));
+  }, []);
+
   const pgn = makePgn(makeGameFromPayload(latest));
 
   return (
@@ -49,24 +69,8 @@ const FullGameRunner = () => {
           xcornersModelRef={xcornersModelRef}
           sourceUrl={videoUrl}
           playbackRate={playbackRate}
-          onMoveDetected={payload => {
-            latestRef.current = payload;
-            setLatest(payload);
-            console.log("FULLGAME_UPDATE", payload);
-          }}
-          onVideoEnded={() => {
-            setDone(true);
-            const game = makeGameFromPayload(latestRef.current);
-            const result = {
-              status: "done",
-              fen: game.fen,
-              pgn: makePgn(game),
-              moves: game.moves,
-              lastMove: game.lastMove,
-              error: game.error,
-            };
-            console.log("FULLGAME_RESULT", JSON.stringify(result));
-          }}
+          onMoveDetected={onMoveDetected}
+          onVideoEnded={onVideoEnded}
         />
       </section>
       <section style={{ padding: 16, fontFamily: "monospace" }}>

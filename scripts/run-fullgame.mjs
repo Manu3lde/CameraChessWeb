@@ -5,7 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const appRoot = path.resolve(import.meta.dirname, "..");
@@ -13,126 +13,55 @@ const videoRoot = path.resolve(repoRoot, "video");
 const publicRoot = path.resolve(appRoot, "public");
 const playbackRate = Number(process.env.FULLGAME_RATE ?? 2);
 const timeoutMs = Number(process.env.FULLGAME_TIMEOUT_MS ?? 900000);
-const allowedVideoExtensions = new Set([".mp4", ".webm", ".mov"]);
 let remoteDebuggingPort;
 
-const whichExecutable = command => {
-  try {
-    const result = spawnSync("which", [command], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (result.status === 0) {
-      return result.stdout.trim();
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-};
-
+/**
+ * Find a Chromium-family browser executable across platforms.
+ * Priority: env var BROWSER_PATH > common install locations.
+ */
 const findBrowser = () => {
-  const envPath = process.env.BROWSER_PATH;
-  if (envPath) {
-    const resolved = path.resolve(envPath);
-    if (fs.existsSync(resolved)) {
-      return resolved;
-    }
-    throw new Error(
-      `BROWSER_PATH is set to ${envPath} but no executable was found there.`,
-    );
+  if (process.env.BROWSER_PATH && fs.existsSync(process.env.BROWSER_PATH)) {
+    return process.env.BROWSER_PATH;
   }
 
-  const candidates = [];
-  switch (os.platform()) {
-    case "win32":
-      candidates.push(
-        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-      );
-      break;
-    case "darwin":
-      candidates.push(
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        "/Applications/Firefox.app/Contents/MacOS/firefox",
-      );
-      break;
-    default:
-      candidates.push(
-        "google-chrome-stable",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-        "microsoft-edge",
-        "microsoft-edge-stable",
-      );
-      break;
+  const candidates = [
+    // Windows – Edge
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    // Windows – Chrome
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    // macOS – Chrome
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    // macOS – Edge
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    // macOS – Chromium
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  ];
+
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
   }
 
-  for (const candidate of candidates) {
-    if (candidate.includes(path.sep)) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } else {
-      const found = whichExecutable(candidate);
-      if (found) {
-        return found;
-      }
+  // Linux / CI – try PATH
+  for (const cmd of [
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
+  ]) {
+    try {
+      const result = execSync(`which ${cmd} 2>/dev/null`, {
+        encoding: "utf8",
+      }).trim();
+      if (result) return result;
+    } catch {
+      // not found, continue
     }
   }
 
-  throw new Error(
-    "No supported browser executable found. Set BROWSER_PATH to a valid Chrome/Edge/Chromium binary.",
-  );
-};
-
-const listVideoFiles = () => {
-  if (!fs.existsSync(videoRoot)) {
-    throw new Error(`Video directory not found at ${videoRoot}`);
-  }
-
-  const files = fs
-    .readdirSync(videoRoot, { withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => entry.name)
-    .filter(name =>
-      allowedVideoExtensions.has(path.extname(name).toLowerCase()),
-    );
-
-  if (files.length === 0) {
-    throw new Error(
-      `No video files found in ${videoRoot}. Add .mp4, .webm, or .mov, or set FULLGAME_VIDEO=<filename>`,
-    );
-  }
-
-  return files;
-};
-
-const selectVideoFile = () => {
-  const configuredFile = process.env.FULLGAME_VIDEO;
-  if (configuredFile) {
-    const filename = path.basename(configuredFile);
-    const resolved = path.resolve(videoRoot, filename);
-    if (!resolved.startsWith(videoRoot)) {
-      throw new Error(`FULLGAME_VIDEO must be a filename inside ${videoRoot}`);
-    }
-    if (!fs.existsSync(resolved)) {
-      throw new Error(`Video file not found: ${resolved}`);
-    }
-    if (!allowedVideoExtensions.has(path.extname(filename).toLowerCase())) {
-      throw new Error(
-        `Unsupported video extension for ${filename}. Only .mp4, .webm, and .mov are allowed.`,
-      );
-    }
-    return filename;
-  }
-
-  return listVideoFiles()[0];
+  return null;
 };
 
 const getFreePort = () =>
@@ -189,12 +118,7 @@ const fixtureVideoPlugin = () => ({
         return;
       }
 
-      const ext = path.extname(videoPath).toLowerCase();
-      let contentType = "application/octet-stream";
-      if (ext === ".mp4") contentType = "video/mp4";
-      else if (ext === ".webm") contentType = "video/webm";
-      else if (ext === ".mov") contentType = "video/quicktime";
-      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Type", "video/mp4");
       fs.createReadStream(videoPath).pipe(res);
     });
   },
@@ -251,21 +175,44 @@ const waitForWebSocketUrl = async () => {
       if (Date.now() - lastLog > 5000) {
         lastLog = Date.now();
         console.log(
-          `Waiting for Edge CDP endpoint at port ${remoteDebuggingPort}: ${
+          `Waiting for browser CDP endpoint at port ${remoteDebuggingPort}: ${
             error?.message ?? error
-          }
-        `,
+          }`,
         );
       }
     }
     await sleep(250);
   }
-  throw new Error("Timed out waiting for Edge remote debugging endpoint.");
+  throw new Error("Timed out waiting for browser remote debugging endpoint.");
+};
+
+// List video files available in the video directory
+const listVideoFiles = () => {
+  if (!fs.existsSync(videoRoot)) return [];
+  return fs.readdirSync(videoRoot).filter(f => /\.(mp4|webm|mov)$/i.test(f));
 };
 
 const run = async () => {
   const browserPath = findBrowser();
-  const videoFile = selectVideoFile();
+  if (!browserPath) {
+    throw new Error(
+      "No Chromium-family browser found.\n" +
+        "Install Google Chrome, Chromium, or Microsoft Edge, " +
+        "or set the BROWSER_PATH environment variable to the executable path.",
+    );
+  }
+  console.log(`Using browser: ${browserPath}`);
+
+  // Pick first available video if no env override
+  const videoFiles = listVideoFiles();
+  if (videoFiles.length === 0) {
+    throw new Error(
+      `No video files found in ${videoRoot}.\n` +
+        "Add an .mp4 file to the video/ directory at the repo root.",
+    );
+  }
+  const videoFile = process.env.FULLGAME_VIDEO ?? videoFiles[0];
+  console.log(`Using video: ${videoFile}`);
 
   console.log("Starting Vite full-game server...");
   const server = await createServer({
@@ -281,14 +228,13 @@ const run = async () => {
   await server.listen();
   const address = server.httpServer.address();
   const port = typeof address === "object" && address ? address.port : 4174;
-  const url = `http://127.0.0.1:${port}/fullgame.html?rate=${playbackRate}&backend=cpu&video=${encodeURIComponent(videoFile)}`;
+  const url = `http://127.0.0.1:${port}/fullgame.html?rate=${playbackRate}&backend=cpu&video=${encodeURIComponent(`/fixture-video/${videoFile}`)}`;
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ccw-fullgame-"));
   remoteDebuggingPort = Number(
     process.env.CHROME_DEBUG_PORT ?? (await getFreePort()),
   );
   console.log(`Opening ${url}`);
-  console.log(`Using browser at ${browserPath}`);
-  console.log(`Using debug port ${remoteDebuggingPort}`);
+  console.log(`Using browser debug port ${remoteDebuggingPort}`);
 
   const browser = spawn(browserPath, [
     `--remote-debugging-port=${remoteDebuggingPort}`,
@@ -303,7 +249,7 @@ const run = async () => {
   ]);
   browser.stderr.on("data", chunk => {
     const text = chunk.toString().trim();
-    if (text) console.error("Edge:", text);
+    if (text) console.error("Browser:", text);
   });
 
   let ws;
@@ -315,14 +261,14 @@ const run = async () => {
     try {
       fs.rmSync(userDataDir, { recursive: true, force: true });
     } catch {
-      // Edge can release profile files shortly after process exit.
+      // browser may hold profile files briefly after exit
     }
   };
 
   try {
-    console.log("Waiting for Edge CDP endpoint...");
+    console.log("Waiting for browser CDP endpoint...");
     const wsUrl = await waitForWebSocketUrl();
-    console.log("Connected to Edge CDP endpoint.");
+    console.log("Connected to browser CDP endpoint.");
     ws = new WebSocket(wsUrl);
     const result = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -419,12 +365,10 @@ const run = async () => {
         const args = message.params.args ?? [];
         const first = args[0]?.value;
         const second = args[1]?.value;
-        if (message.params.type === "error" || first === "FULLGAME_ERROR") {
-          console.error(
-            "Browser console:",
-            args.map(arg => arg.value ?? arg.description).join(" "),
-          );
-        }
+        console.log(
+          "Browser console:",
+          args.map(arg => arg.value ?? arg.description).join(" "),
+        );
         if (first === "FULLGAME_RESULT" && typeof second === "string") {
           clearTimeout(timer);
           clearInterval(pollTimer);
