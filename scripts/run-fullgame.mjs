@@ -245,6 +245,12 @@ const run = async () => {
     "--no-default-browser-check",
     "--disable-background-timer-throttling",
     "--disable-gpu",
+    "--disable-gpu-sandbox",
+    "--disable-accelerated-2d-canvas",
+    "--disable-accelerated-video-decode",
+    "--use-gl=swiftshader",
+    "--use-angle=swiftshader",
+    "--no-sandbox",
     url,
   ]);
   browser.stderr.on("data", chunk => {

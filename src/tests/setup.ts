@@ -33,9 +33,36 @@ Object.defineProperty(HTMLVideoElement.prototype, "addEventListener", {
       if (this.tagName === "VIDEO" && !this.src) {
         this.src = VIDEO_FIXTURE_URL;
       }
-      queueMicrotask(() => listener(new Event("loadedmetadata")));
+      queueMicrotask(() => {
+        Object.defineProperty(this, "readyState", { value: 1, configurable: true });
+        listener(new Event("loadedmetadata"));
+      });
+    }
+    if (type === "canplay" && typeof listener === "function") {
+      queueMicrotask(() => {
+        Object.defineProperty(this, "readyState", { value: 3, configurable: true });
+        listener(new Event("canplay"));
+      });
     }
     return originalAddEventListener.call(this, type, listener, options);
+  },
+  configurable: true,
+});
+
+Object.defineProperty(HTMLVideoElement.prototype, "readyState", {
+  value: 0,
+  configurable: true,
+});
+
+// Mock currentTime to trigger seeked event
+let currentTime = 0;
+Object.defineProperty(HTMLVideoElement.prototype, "currentTime", {
+  get: () => currentTime,
+  set: function (value: number) {
+    currentTime = value;
+    queueMicrotask(() => {
+      this.dispatchEvent(new Event("seeked"));
+    });
   },
   configurable: true,
 });

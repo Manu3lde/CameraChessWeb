@@ -337,16 +337,6 @@ export const _findCorners = async (
     corners,
   );
 
-  if (dispatch) {
-    CORNER_KEYS.forEach(key => {
-      const xy: number[] = keypoints[key];
-      const payload: CornersPayload = {
-        xy: getMarkerXY(xy, canvasRef.current.height, canvasRef.current.width),
-        key: key,
-      };
-      dispatch(cornersSet(payload));
-    });
-  }
   if (onCornersFound) {
     onCornersFound(keypoints);
   }
@@ -372,6 +362,19 @@ export const findCorners = async (
     canvasRef,
     dispatch,
     setText,
+    onCornersFound,
+  );
+
+  const endTensors = tf.memory().numTensors;
+  if (startTensors < endTensors) {
+    console.error(`Memory Leak! (${endTensors} > ${startTensors})`);
+  }
+
+  return () => {
+    tf.disposeVariables();
+  };
+};
+
     onCornersFound,
   );
 

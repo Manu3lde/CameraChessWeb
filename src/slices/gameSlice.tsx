@@ -1,6 +1,4 @@
-import { createSlice } from '@reduxjs/toolkit'
-import { useSelector } from 'react-redux';
-import { Game, RootState } from '../types';
+import { Game } from '../types';
 import { START_FEN } from '../utils/constants';
 import { parseFen, makeFen } from 'chessops/fen';
 import { Move } from 'chessops';
@@ -10,62 +8,6 @@ import { parseSan, makeSan } from 'chessops/san';
 import { makeUci, parseUci } from 'chessops/util';
 
 type HistoryEntry = { move: Move; san: string };
-
-const initialState: Game = {
-  "moves": "",
-  "fen": START_FEN,
-  "start": START_FEN,
-  "lastMove": "",
-  "greedy": false,
-  "fromOpponent": false,
-  "error": null
-};
-
-const gameSlice = createSlice({
-  name: 'game',
-  initialState,
-  reducers: {
-    gameSetMoves(state, action) {
-      state.moves = action.payload
-    },
-    gameSetFen(state, action) {
-      state.fen = action.payload;
-    },
-    gameSetStart(state, action) {
-      state.start = action.payload;
-    },
-    gameSetLastMove(state, action) {
-      state.lastMove = action.payload;
-    },
-    gameResetMoves(state) {
-      state.moves = initialState.moves;
-    },
-    gameResetFen(state) {
-      state.fen = initialState.fen;
-    },
-    gameResetStart(state) {
-      state.start = initialState.start;
-    },
-    gameResetLastMove(state) {
-      state.lastMove = initialState.lastMove;
-    },
-    gameSetError(state, action) {
-      state.error = action.payload;
-    },
-    gameUpdate(state, action) {
-      const newState: Game = {
-        "start": state.start,
-        "moves": action.payload.moves,
-        "fen": action.payload.fen,
-        "lastMove": action.payload.lastMove,
-        "greedy": action.payload.greedy,
-        "fromOpponent": action.payload.fromOpponent ?? false,
-        "error": action.payload.error ?? null
-      }
-      return newState
-    }
-  }
-})
 
 const getMovesFromPgn = (pos: any, startFen: string) => {
   const setup = parseFen(startFen).unwrap();
@@ -81,10 +23,6 @@ const getMovesFromPgn = (pos: any, startFen: string) => {
     tempPos.play(entry.move);
   });
   return pgn.trim();
-}
-
-export const gameSelect = () => {
-  return useSelector((state: RootState) => state.game)
 }
 
 export const makePgn = (game: Game) => {
@@ -168,12 +106,3 @@ export const makeBoard = (game: Game): any => {
   }
   return board;
 }
-
-export const {
-  gameSetMoves, gameResetMoves,
-  gameSetFen, gameResetFen,
-  gameSetStart, gameResetStart,
-  gameSetLastMove, gameResetLastMove,
-  gameUpdate, gameSetError
-} = gameSlice.actions
-export default gameSlice.reducer

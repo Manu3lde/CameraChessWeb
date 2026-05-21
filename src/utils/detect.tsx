@@ -117,7 +117,7 @@ export const getInput = (videoRef: any, keypoints: number[][] | null=null, paddi
     ], 114);
     
     // Transpose + scale + expand
-    const image4D: tf.Tensor4D = tf.expandDims(tf.div(image, 255.0), 0);
+    const image4D = tf.expandDims(tf.div(image, 255.0), 0) as tf.Tensor4D;
 
     return [image4D, width, height, padding];
   });

@@ -1,50 +1,30 @@
-import { renderState } from "./render/renderState";
 import * as tf from "@tensorflow/tfjs-core";
-import { getInvTransform, transformBoundary, transformCenters } from "./warp";
-import { makeUpdatePayload } from "../slices/gameSlice";
-import { getBoxesAndScores, getInput, getXY, invalidVideo } from "./detect";
-import { Mode, MovesData, MovesPair } from "../types";
-import { zeros } from "./math";
-import { CORNER_KEYS } from "./constants";
 import { parseSan } from "chessops/san";
 import { makeUci } from "chessops/util";
+import { makeUpdatePayload } from "../slices/gameSlice";
+import { getBoxesAndScores, getInput, getXY, invalidVideo } from "./detect";
 import { getMovesPairs } from "./moves";
+import { getInvTransform, transformBoundary, transformCenters } from "./warp";
+import { CORNER_KEYS } from "./constants";
+import { renderState } from "./render/renderState";
+import { MovesPair, MovesData, Mode } from "../types";
 
-export const processBoardUpdate = (
-  payload: any,
-  onUpdate: (data: any) => void,
-) => {
-  onUpdate({
-    fen: payload.fen,
-    lastMove: payload.lastMove,
-    isCheck: payload.isCheck ?? false,
-    moves: payload.moves,
-    greedy: payload.greedy,
-    fromOpponent: payload.fromOpponent,
-    error: payload.error ?? null,
-  });
-};
+const zeros = (rows: number, cols: number): number[][] =>
+  Array.from({ length: rows }, () => new Array(cols).fill(0));
 
-const calculateScore = (
-  state: any,
-  move: MovesData,
-  from_thr = 0.6,
-  to_thr = 0.6,
-) => {
+const calculateScore = (state: number[][], movesData: MovesData): number => {
   let score = 0;
-  move.from.forEach(square => {
-    score += 1 - Math.max(...state[square]) - from_thr;
-  });
-
-  for (let i = 0; i < move.to.length; i++) {
-    score += state[move.to[i]][move.targets[i]] - to_thr;
+  for (let i = 0; i < movesData.from.length; i++) {
+    score += state[movesData.from[i]][movesData.targets[i]];
   }
-
+  for (let i = 0; i < movesData.to.length; i++) {
+    score += state[movesData.to[i]][movesData.targets[i]];
+  }
   return score;
 };
 
 const processState = (
-  state: any,
+  state: number[][],
   movesPairs: MovesPair[],
   possibleMoves: Set<string>,
 ): {
@@ -115,84 +95,31 @@ const getBoxCenters = (boxes: tf.Tensor2D) => {
 export const getSquares = (
   boxes: tf.Tensor2D,
   centers3D: tf.Tensor3D,
-  boundary3D: tf.Tensor3D,
+  _boundary3D: tf.Tensor3D,
 ): number[] => {
-  const squares: number[] = tf.tidy(() => {
-    const boxCenters3D: tf.Tensor3D = tf.expandDims(getBoxCenters(boxes), 1);
-    const dist: tf.Tensor2D = tf.sum(
-      tf.square(tf.sub(boxCenters3D, centers3D)),
-      2,
-    );
-    const squares: any = tf.argMin(dist, 1);
-
-    const shiftedBoundary3D: tf.Tensor3D = tf.concat(
-      [
-        tf.slice(boundary3D, [0, 1, 0], [1, 3, 2]),
-        tf.slice(boundary3D, [0, 0, 0], [1, 1, 2]),
-      ],
-      1,
-    );
-
-    const nBoxes: number = boxCenters3D.shape[0];
-
-    const a: tf.Tensor2D = tf.squeeze(
-      tf.sub(
-        tf.slice(boundary3D, [0, 0, 0], [1, 4, 1]),
-        tf.slice(shiftedBoundary3D, [0, 0, 0], [1, 4, 1]),
-      ),
-      [2],
-    );
-    const b: tf.Tensor2D = tf.squeeze(
-      tf.sub(
-        tf.slice(boundary3D, [0, 0, 1], [1, 4, 1]),
-        tf.slice(shiftedBoundary3D, [0, 0, 1], [1, 4, 1]),
-      ),
-      [2],
-    );
-    const c: tf.Tensor2D = tf.squeeze(
-      tf.sub(
-        tf.slice(boxCenters3D, [0, 0, 0], [nBoxes, 1, 1]),
-        tf.slice(shiftedBoundary3D, [0, 0, 0], [1, 4, 1]),
-      ),
-      [2],
-    );
-    const d: tf.Tensor2D = tf.squeeze(
-      tf.sub(
-        tf.slice(boxCenters3D, [0, 0, 1], [nBoxes, 1, 1]),
-        tf.slice(shiftedBoundary3D, [0, 0, 1], [1, 4, 1]),
-      ),
-      [2],
-    );
-
-    const det: tf.Tensor2D = tf.sub(tf.mul(a, d), tf.mul(b, c));
-    const newSquares: tf.Tensor1D = tf.where(
-      tf.any(tf.less(det, 0), 1),
-      tf.scalar(-1),
-      squares,
-    );
-
-    return newSquares.arraySync();
-  });
-
+  const boxCenters = getBoxCenters(boxes);
+  const diff = tf.tidy(() =>
+    tf.abs(tf.sub(tf.expandDims(boxCenters, 1), centers3D)),
+  ) as tf.Tensor3D;
+  const dist: tf.Tensor2D = tf.tidy(
+    () => tf.squeeze(tf.sum(diff, 2), []) as tf.Tensor2D,
+  );
+  const squaresTensor = tf.argMin(dist, 1);
+  const squares = Array.from(squaresTensor.dataSync());
+  tf.dispose([boxCenters, diff, dist, squaresTensor]);
   return squares;
 };
 
-export const getUpdate = (scoresTensor: tf.Tensor2D, squares: number[]) => {
-  const update: number[][] = zeros(64, 12);
-  const scores: number[][] = scoresTensor.arraySync();
-
+export const getUpdate = (
+  scores: tf.Tensor2D,
+  squares: number[],
+): number[][] => {
+  const update = zeros(64, 12);
+  const scoresData = scores.arraySync() as number[][];
   for (let i = 0; i < squares.length; i++) {
-    const square = squares[i];
-    if (
-      typeof square !== "number" ||
-      !Number.isInteger(square) ||
-      square < 0 ||
-      square >= 64
-    ) {
-      continue;
-    }
+    const sq = squares[i];
     for (let j = 0; j < 12; j++) {
-      update[square][j] = Math.max(update[square][j], scores[i][j]);
+      update[sq][j] = Math.max(update[sq][j], scoresData[i][j]);
     }
   }
   return update;
@@ -228,8 +155,7 @@ export const detect = async (
   );
   const videoWidth: number = videoRef.current.videoWidth;
   const videoHeight: number = videoRef.current.videoHeight;
-  
-  // Use execute() instead of predict() for more robust model inference
+
   const preds: any = modelRef.current.execute(image4D);
   const { boxes, scores } = getBoxesAndScores(
     Array.isArray(preds) ? preds[0] : preds,
@@ -246,15 +172,21 @@ export const detect = async (
   return { boxes, scores };
 };
 
-export const getKeypoints = (cornersRef: any, canvasRef: any): number[][] => {
-  const keypoints = CORNER_KEYS.map(x =>
-    getXY(
-      cornersRef.current[x],
-      canvasRef.current.height,
-      canvasRef.current.width,
-    ),
-  );
-  return keypoints;
+export const getKeypoints = (cornersRef: any, canvasRef?: any): number[][] => {
+  // When canvasRef is supplied (findFen path), cornersRef.current holds marker-space
+  // coords that need getXY() to convert to model-space.
+  // When called from the findPieces loop, cornersRef.current already holds
+  // model-space coords set directly by findCorners → no conversion needed.
+  if (canvasRef) {
+    return CORNER_KEYS.map(x =>
+      getXY(
+        cornersRef.current[x],
+        canvasRef.current.height,
+        canvasRef.current.width,
+      ),
+    );
+  }
+  return CORNER_KEYS.map(x => cornersRef.current[x]);
 };
 
 export const findPieces = (
@@ -278,17 +210,18 @@ export const findPieces = (
   let state: number[][];
   let keypoints: number[][];
   let possibleMoves: Set<string>;
-  let timeoutId: any;
+  // Use a number for setTimeout handle (works in both browser and Node environments)
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let greedyMoveToTime: { [move: string]: number };
-  let lastFrameTime = 200; // default assumption
 
   const loop = async () => {
     if (stopped) return;
+
     try {
       if (playingRef.current === false || invalidVideo(videoRef)) {
         if (centers3D) {
-          tf.dispose([centers3D, boundary3D]);
+          tf.dispose([centers3D, boundary3D].filter(Boolean) as tf.Tensor[]);
           centers3D = null;
           boundary3D = null;
         }
@@ -296,6 +229,11 @@ export const findPieces = (
       } else {
         if (centers === null) {
           keypoints = getKeypoints(cornersRef);
+          // If any corner is still undefined (corners not yet detected), skip this frame
+          if (keypoints.some(k => k === undefined || k === null)) {
+            timeoutId = setTimeout(loop, 0);
+            return;
+          }
           const invTransform = getInvTransform(keypoints);
           [centers, centers3D] = transformCenters(invTransform);
           [boundary, boundary3D] = transformBoundary(invTransform);
@@ -315,9 +253,7 @@ export const findPieces = (
           processState(state, movesPairsRef.current, possibleMoves);
 
         const endTime: number = performance.now();
-        const frameTime = endTime - startTime;
-        lastFrameTime = frameTime;
-        const fps: string = (1000 / frameTime).toFixed(1);
+        const fps: string = (1000 / (endTime - startTime)).toFixed(1);
 
         let hasMove: boolean = false;
         if (bestMoves !== null && mode !== "play") {
@@ -338,20 +274,23 @@ export const findPieces = (
             greedyMoveToTime[move] = endTime;
           }
 
-          const confirmMs = Math.max(1000, lastFrameTime * 3);
-          const elapsed = endTime - greedyMoveToTime[move];
+          // Scale the greedy confirmation window by how fast inference is running.
+          // On CPU backend one loop iteration often takes >500 ms; waiting a full
+          // wall-clock second before confirming a greedy move means we effectively
+          // skip it. Use the larger of 1 s and 3× the current frame time instead.
+          const frameMs = endTime - startTime;
+          const confirmMs = Math.max(1000, frameMs * 3);
+          const secondElapsed = endTime - greedyMoveToTime[move] > confirmMs;
           const newMove =
             sanToLan(boardRef.current, move) !== lastMoveRef.current;
-          hasGreedyMove = elapsed > confirmMs && newMove;
+          hasGreedyMove = secondElapsed && newMove;
           if (hasGreedyMove) {
             boardRef.current.playSan(move);
-            // Reset timers for other moves to avoid stale greedy data
             greedyMoveToTime = {};
           }
         }
 
         if (hasMove || hasGreedyMove) {
-          // No takebacks in "play" mode
           const greedy = mode === "play" ? false : hasGreedyMove;
           const payload = makeUpdatePayload(boardRef.current, greedy);
 
@@ -364,7 +303,7 @@ export const findPieces = (
             onUpdate({
               fen: payload.fen,
               lastMove: payload.lastMove,
-              isCheck: boardRef.current.isCheck(),
+              isCheck: boardRef.current.isCheck?.() ?? false,
               moves: payload.moves,
               greedy: payload.greedy,
               fromOpponent: payload.fromOpponent,
@@ -386,16 +325,27 @@ export const findPieces = (
     } catch (err) {
       console.error("findPieces loop error:", err);
     }
-    timeoutId = setTimeout(loop, 0);
+
+    if (!stopped) {
+      // Use setTimeout(0) instead of requestAnimationFrame so the browser's
+      // video decoder and event loop can advance between inference frames.
+      // rAF in --headless=new --disable-gpu mode is throttled and can prevent
+      // the video element from delivering new frames (stalls currentTime).
+      timeoutId = setTimeout(loop, 0);
+    }
   };
+
+  // Kick off the first iteration
   timeoutId = setTimeout(loop, 0);
 
   return () => {
     stopped = true;
-    clearTimeout(timeoutId);
-    // DO NOT call tf.disposeVariables() as it disposes model weights too!
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     if (centers3D) {
-      tf.dispose([centers3D, boundary3D]);
+      tf.dispose([centers3D, boundary3D].filter(Boolean) as tf.Tensor[]);
     }
   };
 };
